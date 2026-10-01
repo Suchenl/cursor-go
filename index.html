@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex">
-<title>Cursor Remote</title>
+<title>Remote</title>
 <style>
   body { margin: 0; padding: 40px 24px; background: #181818; color: #ddd; font: 15px -apple-system, "PingFang SC", sans-serif; }
   input, button { display: block; width: 100%; box-sizing: border-box; margin-top: 10px; padding: 10px; font-size: 16px; color: #eee; background: #2d2d2d; border: 1px solid #444; border-radius: 6px; }
@@ -16,22 +16,33 @@
 </style>
 </head>
 <body>
-<div id="msg">正在查找电脑端地址…</div>
+<div id="msg">加载中…</div>
 <div id="form" hidden>
-  <div>首次使用：输入登录密码（只保存在这台手机上）</div>
+  <div>输入密码（只保存在这台设备上）</div>
   <input id="pw" type="password" autocomplete="current-password">
-  <button id="save">保存并进入</button>
+  <button id="save">进入</button>
 </div>
 <div id="actions" hidden>
   <button id="retry">重试</button>
 </div>
 <div class="muted" id="info"></div>
-<div class="muted"><a href="#" id="forget">清除这台手机上保存的密码</a></div>
+<div class="muted"><a href="#" id="forget">清除这台设备上保存的密码</a></div>
 <script>
 const KEY = 'cr-pw';
 const $ = id => document.getElementById(id);
 const home = location.href.split('#')[0].split('?')[0];
-let target;
+let info;
+
+const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+
+async function decryptUrl(pw) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: b64(info.salt), iterations: info.iter, hash: 'SHA-256' },
+    base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64(info.iv) }, key, b64(info.data));
+  return JSON.parse(new TextDecoder().decode(plain)).url;
+}
 
 async function online(url) {
   const ctl = new AbortController();
@@ -46,39 +57,52 @@ async function online(url) {
   }
 }
 
-function go() {
-  const pw = localStorage.getItem(KEY);
-  if (!pw) { $('msg').textContent = ''; $('form').hidden = false; return; }
-  location.replace(`${target}/#k=${encodeURIComponent(pw)}&home=${encodeURIComponent(home)}`);
+function askPassword(text) {
+  $('msg').textContent = text;
+  $('form').hidden = false;
+  $('pw').focus();
+}
+
+function offline(text) {
+  $('msg').textContent = text;
+  $('actions').hidden = false;
 }
 
 async function start() {
   $('actions').hidden = true;
-  $('msg').textContent = '正在查找电脑端地址…';
+  $('form').hidden = true;
+  $('msg').textContent = '加载中…';
   try {
-    const info = await fetch('url.json?t=' + Date.now(), { cache: 'no-store' }).then(r => r.json());
-    target = info.url;
-    $('info').textContent = '地址更新于 ' + new Date(info.updated).toLocaleString();
+    info = await fetch('url.json?t=' + Date.now(), { cache: 'no-store' }).then(r => r.json());
   } catch {
-    $('msg').textContent = '读取地址失败，请检查手机网络';
-    $('actions').hidden = false;
-    return;
+    return offline('读取失败，请检查网络');
   }
-  if (!target) { $('msg').textContent = '电脑端还没有发布过地址'; $('actions').hidden = false; return; }
+  if (!info.data) return offline('电脑端还没有发布过地址');
+  $('info').textContent = '更新于 ' + new Date(info.updated).toLocaleString();
+  const pw = localStorage.getItem(KEY);
+  if (!pw) return askPassword('');
+  let url;
+  try {
+    url = await decryptUrl(pw);
+  } catch {
+    localStorage.removeItem(KEY);
+    return askPassword('密码不对（或电脑端改过密码），请重新输入');
+  }
   $('msg').textContent = '正在连接电脑…';
-  if (await online(target)) return go();
-  $('msg').textContent = '电脑端不在线（可能关机、睡眠，或服务刚重启、新地址还在发布中，约 1 分钟）';
-  $('actions').hidden = false;
+  if (!await online(url)) return offline('电脑端不在线（可能关机、睡眠，或服务刚重启、新地址还在发布中，约 1 分钟）');
+  location.replace(`${url}/#k=${encodeURIComponent(pw)}&home=${encodeURIComponent(home)}`);
 }
 
 $('save').onclick = () => {
   const pw = $('pw').value.trim();
   if (!pw) return;
   localStorage.setItem(KEY, pw);
-  go();
+  $('pw').value = '';
+  start();
 };
+$('pw').onkeydown = e => { if (e.key === 'Enter') $('save').click(); };
 $('retry').onclick = start;
-$('forget').onclick = e => { e.preventDefault(); localStorage.removeItem(KEY); alert('已清除'); location.reload(); };
+$('forget').onclick = e => { e.preventDefault(); localStorage.removeItem(KEY); location.reload(); };
 start();
 </script>
 </body>
