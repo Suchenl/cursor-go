@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<title>Cursor Remote</title>
+<style>
+  body { margin: 0; padding: 40px 24px; background: #181818; color: #ddd; font: 15px -apple-system, "PingFang SC", sans-serif; }
+  input, button { display: block; width: 100%; box-sizing: border-box; margin-top: 10px; padding: 10px; font-size: 16px; color: #eee; background: #2d2d2d; border: 1px solid #444; border-radius: 6px; }
+  button { background: #0e639c; border-color: #1177bb; }
+  .muted { color: #888; font-size: 13px; margin-top: 16px; }
+  a { color: #4af; }
+</style>
+</head>
+<body>
+<div id="msg">正在查找电脑端地址…</div>
+<div id="form" hidden>
+  <div>首次使用：输入登录密码（只保存在这台手机上）</div>
+  <input id="pw" type="password" autocomplete="current-password">
+  <button id="save">保存并进入</button>
+</div>
+<div id="actions" hidden>
+  <button id="retry">重试</button>
+</div>
+<div class="muted" id="info"></div>
+<div class="muted"><a href="#" id="forget">清除这台手机上保存的密码</a></div>
+<script>
+const KEY = 'cr-pw';
+const $ = id => document.getElementById(id);
+const home = location.href.split('#')[0].split('?')[0];
+let target;
+
+async function online(url) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 8000);
+  try {
+    await fetch(url + '/api/me', { mode: 'no-cors', cache: 'no-store', signal: ctl.signal });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function go() {
+  const pw = localStorage.getItem(KEY);
+  if (!pw) { $('msg').textContent = ''; $('form').hidden = false; return; }
+  location.replace(`${target}/#k=${encodeURIComponent(pw)}&home=${encodeURIComponent(home)}`);
+}
+
+async function start() {
+  $('actions').hidden = true;
+  $('msg').textContent = '正在查找电脑端地址…';
+  try {
+    const info = await fetch('url.json?t=' + Date.now(), { cache: 'no-store' }).then(r => r.json());
+    target = info.url;
+    $('info').textContent = '地址更新于 ' + new Date(info.updated).toLocaleString();
+  } catch {
+    $('msg').textContent = '读取地址失败，请检查手机网络';
+    $('actions').hidden = false;
+    return;
+  }
+  if (!target) { $('msg').textContent = '电脑端还没有发布过地址'; $('actions').hidden = false; return; }
+  $('msg').textContent = '正在连接电脑…';
+  if (await online(target)) return go();
+  $('msg').textContent = '电脑端不在线（可能关机、睡眠，或服务刚重启、新地址还在发布中，约 1 分钟）';
+  $('actions').hidden = false;
+}
+
+$('save').onclick = () => {
+  const pw = $('pw').value.trim();
+  if (!pw) return;
+  localStorage.setItem(KEY, pw);
+  go();
+};
+$('retry').onclick = start;
+$('forget').onclick = e => { e.preventDefault(); localStorage.removeItem(KEY); alert('已清除'); location.reload(); };
+start();
+</script>
+</body>
+</html>
